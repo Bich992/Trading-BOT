@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Trading Bot – AUTO Multi-Asset + Legs (PAPER)")
-        self.resize(1850, 1040)
+        self.resize(1900, 1080)
 
         self.provider = BinanceProvider()
         self.engine = DecisionEngine()
@@ -58,7 +58,10 @@ class MainWindow(QMainWindow):
         self.markers_by_symbol = {}
 
         # Watchlist
-        self.watchlist = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        self.watchlist = [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+            "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "MATIC/USDT", "DOT/USDT"
+        ]
 
         # Indicators
         self.ema_1, self.ema_2, self.ema_3 = 20, 50, 200
@@ -104,6 +107,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Market Browser"))
         self.list_markets = QListWidget()
+        self.list_markets.setAlternatingRowColors(True)
         layout.addWidget(self.list_markets, 2)
 
         btn_row = QHBoxLayout()
@@ -118,6 +122,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Watchlist (AUTO works here)"))
         self.list_watch = QListWidget()
         self.list_watch.itemClicked.connect(self._select_asset_from_watchlist)
+        self.list_watch.setAlternatingRowColors(True)
         layout.addWidget(self.list_watch, 2)
 
         layout.addWidget(QLabel("Portfolio (PAPER)"))
@@ -152,6 +157,10 @@ class MainWindow(QMainWindow):
         self.btn_refresh = QPushButton("Refresh Chart")
         self.btn_refresh.clicked.connect(self._refresh_chart)
         header.addWidget(self.btn_refresh)
+
+        zoom_hint = QLabel("Scroll on chart to zoom / drag toolbar to pan")
+        zoom_hint.setStyleSheet("color:#666;font-size:12px;")
+        header.addWidget(zoom_hint)
 
         layout.addLayout(header)
 
@@ -282,6 +291,10 @@ class MainWindow(QMainWindow):
         self.list_watch.clear()
         for s in self.watchlist:
             self.list_watch.addItem(QListWidgetItem(s))
+
+        if self.watchlist and (self.current_symbol is None or self.current_symbol not in self.watchlist):
+            self.list_watch.setCurrentRow(0)
+            self._select_asset_from_watchlist(self.list_watch.item(0))
 
     def _add_selected_to_watchlist(self):
         item = self.list_markets.currentItem()
