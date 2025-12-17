@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QLineEdit, QMessageBox, QSpinBox, QDoubleSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
+from PySide6.QtGui import QColor, QPalette
 
 import pandas as pd
 
@@ -45,8 +46,9 @@ class MarketsWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Trading Bot – AUTO Multi-Asset + Legs (PAPER)")
-        self.resize(1900, 1080)
+        self.setWindowTitle("Alpha Desk – Pro Trading Bot Dashboard (PAPER)")
+        self.resize(1920, 1100)
+        self._apply_dark_theme()
 
         self.provider = BinanceProvider()
         self.engine = DecisionEngine()
@@ -63,6 +65,8 @@ class MainWindow(QMainWindow):
         self.current_tf = "5m"
         self.last_df = None
         self.markers_by_symbol = {}
+        self.bot_state = "LEARNING"
+        self.peak_equity = self.initial_cash
 
         # Watchlist
         self.watchlist = [
@@ -79,24 +83,75 @@ class MainWindow(QMainWindow):
         self.auto_timer = QTimer(self)
         self.auto_timer.timeout.connect(self._auto_multi_tick)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._build_center_panel())
-        splitter.addWidget(self._build_right_panel())
-        splitter.setSizes([420, 980, 450])
+        main_root = QWidget()
+        main_layout = QVBoxLayout(main_root)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
 
-        root = QWidget()
-        root_layout = QHBoxLayout(root)
-        root_layout.addWidget(splitter)
-        self.setCentralWidget(root)
+        self.top_bar = self._build_top_bar()
+        main_layout.addWidget(self.top_bar)
+
+        shell_splitter = QSplitter(Qt.Vertical)
+        shell_splitter.setChildrenCollapsible(False)
+
+        body_splitter = QSplitter(Qt.Horizontal)
+        body_splitter.setChildrenCollapsible(False)
+        body_splitter.addWidget(self._build_sidebar())
+
+        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.addWidget(self._build_center_panel())
+        content_splitter.addWidget(self._build_right_panel())
+        content_splitter.setSizes([1200, 520])
+
+        body_splitter.addWidget(content_splitter)
+        body_splitter.setSizes([220, 1500])
+
+        shell_splitter.addWidget(body_splitter)
+        shell_splitter.addWidget(self._build_bottom_panel())
+        shell_splitter.setSizes([840, 220])
+
+        main_layout.addWidget(shell_splitter)
+        self.setCentralWidget(main_root)
 
         self._refresh_portfolio_view()
         self._refresh_trade_history()
         self._refresh_positions_list()
         self._refresh_watchlist()
         self._refresh_recap()
+        self._update_top_bar()
 
     # ---------------- LEFT ----------------
+    def _build_sidebar(self):
+        sidebar = QWidget()
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(10)
+
+        title = QLabel("Workspace")
+        title.setStyleSheet("font-size:15px;font-weight:700;color:#e9ecef;")
+        layout.addWidget(title)
+
+        self.nav_list = QListWidget()
+        self.nav_list.addItems([
+            "Dashboard",
+            "Markets",
+            "Strategies",
+            "Risk Control",
+            "Trades",
+            "Analytics",
+            "Recap & Reports",
+            "Settings",
+        ])
+        self.nav_list.setCurrentRow(0)
+        self.nav_list.setStyleSheet(
+            "QListWidget{background:#0f1116;color:#cfd8dc;border:1px solid #1f2933;}"
+            "QListWidget::item:selected{background:#1c7ed6;}"
+        )
+        layout.addWidget(self.nav_list)
+
+        return sidebar
+
     def _build_left_panel(self):
         splitter = QSplitter(Qt.Vertical)
         splitter.setChildrenCollapsible(False)
@@ -317,6 +372,67 @@ class MainWindow(QMainWindow):
 
         return splitter
 
+    def _build_bottom_panel(self):
+        panel = QWidget()
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(10)
+
+        log_box = QGroupBox("Live Log")
+        l_layout = QVBoxLayout(log_box)
+        self.txt_stories_bottom = QTextEdit()
+        self.txt_stories_bottom.setReadOnly(True)
+        self.txt_stories_bottom.setStyleSheet("background:#0f1116;color:#e9ecef;")
+        l_layout.addWidget(self.txt_stories_bottom)
+
+        trades_box = QGroupBox("Trade Tape")
+        t_layout = QVBoxLayout(trades_box)
+        self.txt_trades_bottom = QTextEdit()
+        self.txt_trades_bottom.setReadOnly(True)
+        self.txt_trades_bottom.setStyleSheet("background:#0f1116;color:#e9ecef;")
+        t_layout.addWidget(self.txt_trades_bottom)
+
+        layout.addWidget(log_box, 3)
+        layout.addWidget(trades_box, 2)
+        return panel
+
+    def _build_top_bar(self):
+        wrapper = QWidget()
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(16)
+
+        def badge(text: str, color: str):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"padding:6px 10px;border-radius:6px;background:{color};color:white;font-weight:600;"
+            )
+            return lbl
+
+        self.lbl_mode = badge("PAPER", "#364fc7")
+        self.lbl_state = badge("LEARNING", "#e67700")
+        layout.addWidget(self.lbl_mode)
+        layout.addWidget(self.lbl_state)
+
+        self.lbl_tf_active = QLabel("Timeframes: –")
+        self.lbl_tf_active.setStyleSheet("color:#e9ecef;font-weight:600;")
+        layout.addWidget(self.lbl_tf_active)
+
+        self.lbl_equity = QLabel("Equity: —")
+        self.lbl_equity.setStyleSheet("color:#e9ecef;font-weight:700;font-size:15px;")
+        layout.addWidget(self.lbl_equity)
+
+        self.lbl_dd = QLabel("Drawdown: —")
+        self.lbl_dd.setStyleSheet("color:#faa307;font-weight:600;")
+        layout.addWidget(self.lbl_dd)
+
+        self.lbl_alert = badge("Alert: None", "#2b8a3e")
+        layout.addWidget(self.lbl_alert)
+
+        layout.addStretch()
+
+        return wrapper
+
     # ---------------- Markets load/search ----------------
     def _load_all_markets_async(self):
         self.btn_load.setEnabled(False)
@@ -436,6 +552,7 @@ class MainWindow(QMainWindow):
 
         if self.chk_auto.isChecked():
             self.auto_timer.start(self.cfg.interval_sec * 1000)
+        self._update_top_bar()
 
     def _reset_portfolio(self):
         cash = float(self.sp_cash.value())
@@ -449,6 +566,7 @@ class MainWindow(QMainWindow):
         self._refresh_trade_history()
         self._refresh_positions_list()
         self._refresh_recap()
+        self._update_top_bar()
 
     def _toggle_auto(self, _):
         if self.chk_auto.isChecked():
@@ -504,6 +622,7 @@ class MainWindow(QMainWindow):
         self._refresh_trade_history()
         self._refresh_positions_list()
         self._refresh_recap()
+        self._update_top_bar()
 
         # refresh chart only for selected symbol (avoid heavy UI)
         if self.current_symbol:
@@ -524,6 +643,8 @@ class MainWindow(QMainWindow):
         stamp = dt.datetime.now().strftime("%H:%M:%S")
         new_line = f"[{stamp}] {line}"
         self.txt_stories.setText((prev + "\n" + new_line).strip() if prev else new_line)
+        log_prev = self.txt_stories_bottom.toPlainText().strip()
+        self.txt_stories_bottom.setText((log_prev + "\n" + new_line).strip() if log_prev else new_line)
 
     def _refresh_portfolio_view(self):
         prices = {}
@@ -545,6 +666,7 @@ class MainWindow(QMainWindow):
             if abs(nq) > 0:
                 lines.append(f"- {sym}: net_qty={nq:.6f} avg={book.avg_entry():.6f} legs={book.legs_count()}")
         self.txt_portfolio.setText("\n".join(lines))
+        self._update_top_bar()
 
     def _refresh_positions_list(self):
         self.list_positions.clear()
@@ -583,6 +705,7 @@ class MainWindow(QMainWindow):
                 f"| qty={t.qty:.6f} @ {t.price:.6f} | fee={t.fee:.4f} | pnlR={t.pnl_realized:.4f} | {t.note}"
             )
         self.txt_trades.setText("\n".join(lines) if lines else "No trades yet.")
+        self.txt_trades_bottom.setText("\n".join(lines) if lines else "No trades yet.")
 
     def _refresh_recap(self):
         trades = list(self.portfolio.trades)
@@ -617,6 +740,64 @@ class MainWindow(QMainWindow):
 
         self.txt_recap.setText("\n".join(lines))
         self.recap_chart.plot(trades, self.initial_cash)
+        self._update_top_bar()
+
+    def _update_top_bar(self):
+        prices = {}
+        if self.current_symbol and self.last_df is not None and not self.last_df.empty:
+            prices[self.current_symbol] = float(self.last_df["Close"].iloc[-1])
+
+        equity = self.portfolio.equity(prices)
+        self.peak_equity = max(self.peak_equity, equity)
+        dd = 0 if self.peak_equity == 0 else (equity - self.peak_equity) / self.peak_equity * 100
+        self.lbl_equity.setText(f"Equity: {equity:.2f} USDT")
+        self.lbl_dd.setText(f"Drawdown: {dd:.2f}%")
+        self.lbl_dd.setStyleSheet(
+            "color:#e03131;font-weight:700;" if dd < -2 else "color:#e9ecef;font-weight:700;"
+        )
+
+        tf_text = ", ".join(self.tf_candidates)
+        self.lbl_tf_active.setText(f"Timeframes: {tf_text} | Chart: {self.current_tf}")
+
+        if self.chk_auto.isChecked():
+            self.lbl_state.setText("TRADING")
+            self.lbl_state.setStyleSheet("padding:6px 10px;border-radius:6px;background:#2f9e44;color:white;font-weight:700;")
+        else:
+            self.lbl_state.setText(self.bot_state)
+            self.lbl_state.setStyleSheet("padding:6px 10px;border-radius:6px;background:#e67700;color:white;font-weight:700;")
+
+        alert_msg = "Stable"
+        alert_color = "#2b8a3e"
+        if dd < -5:
+            alert_msg = "Drawdown risk"
+            alert_color = "#e03131"
+        elif not self.watchlist:
+            alert_msg = "No assets selected"
+            alert_color = "#f08c00"
+        self.lbl_alert.setText(f"Alert: {alert_msg}")
+        self.lbl_alert.setStyleSheet(
+            f"padding:6px 10px;border-radius:6px;background:{alert_color};color:white;font-weight:700;"
+        )
+
+    def _apply_dark_theme(self):
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(10, 12, 16))
+        palette.setColor(QPalette.WindowText, Qt.white)
+        palette.setColor(QPalette.Base, QColor(15, 17, 22))
+        palette.setColor(QPalette.AlternateBase, QColor(23, 26, 32))
+        palette.setColor(QPalette.Text, QColor(235, 240, 243))
+        palette.setColor(QPalette.Button, QColor(26, 29, 36))
+        palette.setColor(QPalette.ButtonText, QColor(235, 240, 243))
+        palette.setColor(QPalette.Highlight, QColor(49, 132, 255))
+        palette.setColor(QPalette.HighlightedText, Qt.white)
+        self.setPalette(palette)
+        self.setStyleSheet(
+            "QWidget{background:#0b0d11;color:#e9ecef;}"
+            "QGroupBox{border:1px solid #1f2933;border-radius:6px;margin-top:8px;padding:8px;}"
+            "QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QTextEdit{background:#0f1116;border:1px solid #1f2933;border-radius:6px;}"
+            "QPushButton{background:#1c7ed6;color:white;border-radius:6px;padding:6px 12px;font-weight:600;}"
+            "QPushButton:disabled{background:#343a40;color:#adb5bd;}"
+        )
 
 
 if __name__ == "__main__":

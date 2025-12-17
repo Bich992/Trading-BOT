@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 
 class ChartWidget(FigureCanvas):
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(9, 7), tight_layout=True)
+        self.fig = Figure(figsize=(9, 7), tight_layout=True, facecolor="#0b0d11")
         super().__init__(self.fig)
         self.setParent(parent)
 
@@ -18,9 +18,11 @@ class ChartWidget(FigureCanvas):
         # Enable smooth mouse-wheel zooming over the charts.
         self.mpl_connect("scroll_event", self._on_scroll)
 
-        # give the chart a slightly warmer background to improve readability on mobile/hi-dpi
         for ax in (self.ax_price, self.ax_rsi, self.ax_macd):
-            ax.set_facecolor("#f8f9fa")
+            ax.set_facecolor("#0f1116")
+            ax.tick_params(colors="#dee2e6")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#1f2933")
 
     def plot(
         self,
@@ -36,11 +38,19 @@ class ChartWidget(FigureCanvas):
         self.ax_rsi.clear()
         self.ax_macd.clear()
 
+        style = mpf.make_mpf_style(
+            base_mpf_style="nightclouds",
+            marketcolors=mpf.make_marketcolors(
+                up="#51cf66", down="#ff6b6b", edge="inherit", wick="inherit"
+            ),
+            gridcolor="#1f2933",
+        )
+
         mpf.plot(
             df,
             ax=self.ax_price,
             type="candle",
-            style="charles",
+            style=style,
             mav=ema_list,
             volume=False,
             show_nontrading=True
@@ -62,25 +72,25 @@ class ChartWidget(FigureCanvas):
                         linewidth=0.6,
                     )
 
-        self.ax_price.grid(True, linestyle=":", alpha=0.4)
+        self.ax_price.grid(True, linestyle=":", alpha=0.25, color="#1f2933")
         self.ax_price.set_title(title or "Price / EMA (sim)", loc="left")
 
         rsi = self._rsi(df["Close"], period=rsi_period)
-        self.ax_rsi.plot(df.index, rsi, color="#0d6efd", linewidth=1.2)
-        self.ax_rsi.fill_between(df.index, rsi, 50, color="#0d6efd", alpha=0.08)
-        self.ax_rsi.axhline(70, linestyle="--", color="red", alpha=0.7)
-        self.ax_rsi.axhline(30, linestyle="--", color="green", alpha=0.7)
+        self.ax_rsi.plot(df.index, rsi, color="#4dabf7", linewidth=1.2)
+        self.ax_rsi.fill_between(df.index, rsi, 50, color="#4dabf7", alpha=0.12)
+        self.ax_rsi.axhline(70, linestyle="--", color="#ff6b6b", alpha=0.7)
+        self.ax_rsi.axhline(30, linestyle="--", color="#69db7c", alpha=0.7)
         self.ax_rsi.set_ylabel(f"RSI ({rsi_period})")
-        self.ax_rsi.grid(True, linestyle=":", alpha=0.3)
+        self.ax_rsi.grid(True, linestyle=":", alpha=0.25, color="#1f2933")
 
         macd, signal = self._macd(df["Close"], macd_params)
         hist = macd - signal
-        self.ax_macd.bar(df.index, hist, color="#adb5bd", alpha=0.5, width=0.8, label="Hist")
-        self.ax_macd.plot(df.index, macd, label="MACD", color="#6f42c1")
-        self.ax_macd.plot(df.index, signal, label="Signal", color="#d63384")
+        self.ax_macd.bar(df.index, hist, color="#748ffc", alpha=0.45, width=0.8, label="Hist")
+        self.ax_macd.plot(df.index, macd, label="MACD", color="#9775fa")
+        self.ax_macd.plot(df.index, signal, label="Signal", color="#f783ac")
         self.ax_macd.legend(loc="upper left")
         self.ax_macd.set_ylabel("MACD")
-        self.ax_macd.grid(True, linestyle=":", alpha=0.3)
+        self.ax_macd.grid(True, linestyle=":", alpha=0.25, color="#1f2933")
 
         self.fig.tight_layout()
         self.draw()

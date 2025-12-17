@@ -33,6 +33,16 @@ Opinionated refactor inspired by Freqtrade/Hummingbot/Backtrader patterns. Focus
   PY
   ```
 
+### Desktop UI overview
+- **Theme**: dark, high-contrast dashboard with status top bar, navigation sidebar, and split panels for charts, controls, and analytics.
+- **Top bar**: mode (PAPER/LIVE), bot state (learning/trading), active timeframes, equity and drawdown gauges, and alert badge.
+- **Navigation**: sidebar sections for Dashboard, Markets, Strategies, Risk Control, Trades, Analytics, Recap & Reports, and Settings.
+- **Main panel**: TradingView-style chart (candles + EMA/RSI/MACD overlays) with zoom/pan, live timeframe selector, and configurable AUTO multi-asset controls.
+- **Right analytics**: bot thoughts, trade history, and recap performance widget.
+- **Bottom tape**: structured bot log and trade tape for quick scanning without blocking the main view.
+- **Shortcuts**: scroll to zoom charts, drag to pan via toolbar, and use the timeframe combo box for quick switching.
+- **Screenshot placeholder**: add updated UI captures to `docs/ui_dashboard_dark.png` once available.
+
 ## Backtest
 Provide historical data frames and call `backtest.runner.run_backtest`.
 Example stub:
