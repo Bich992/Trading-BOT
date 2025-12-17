@@ -67,8 +67,10 @@ class ChartWidget(QWidget):
         self.graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self.graphics)
 
-        self._time_axis = pg.graphicsItems.DateAxisItem.DateAxisItem()
-        self.price_plot = self.graphics.addPlot(row=0, col=0, axisItems={"bottom": self._time_axis})
+        # Use separate axis instances per plot to avoid sharing the same AxisItem object,
+        # which pyqtgraph disallows across multiple plots.
+        self._price_time_axis = pg.graphicsItems.DateAxisItem.DateAxisItem()
+        self.price_plot = self.graphics.addPlot(row=0, col=0, axisItems={"bottom": self._price_time_axis})
         self.price_plot.showGrid(x=True, y=True, alpha=0.18)
         self.price_plot.setLabel("left", "Price")
         self.price_plot.getAxis("right").setStyle(showValues=False)
@@ -76,7 +78,8 @@ class ChartWidget(QWidget):
         self.price_plot.setMenuEnabled(False)
         self.price_plot.hideButtons()
 
-        self.volume_plot = self.graphics.addPlot(row=1, col=0, axisItems={"bottom": self._time_axis})
+        self._volume_time_axis = pg.graphicsItems.DateAxisItem.DateAxisItem()
+        self.volume_plot = self.graphics.addPlot(row=1, col=0, axisItems={"bottom": self._volume_time_axis})
         self.volume_plot.setXLink(self.price_plot)
         self.volume_plot.showGrid(x=True, y=True, alpha=0.12)
         self.volume_plot.setLabel("left", "Volume")
