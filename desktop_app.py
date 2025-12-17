@@ -96,7 +96,7 @@ class MainWindow(QMainWindow):
 
         body_splitter = QSplitter(Qt.Horizontal)
         body_splitter.setChildrenCollapsible(False)
-        body_splitter.addWidget(self._build_sidebar())
+        body_splitter.addWidget(self._build_left_panel())
 
         content_splitter = QSplitter(Qt.Horizontal)
         content_splitter.setChildrenCollapsible(False)
