@@ -1,0 +1,33 @@
+python_version: "3.11"
+data_dir: data
+reports_dir: reports
+enable_live: false
+paper:
+  starting_cash: 10000
+  fee_rate: 0.001
+  slippage_bps: 2.5
+  simulate_latency_ms: 120
+  maker_fee: 0.0002
+  taker_fee: 0.0006
+risk:
+  max_drawdown_pct: 0.2
+  max_trades: 1000
+  max_concurrent_legs: 6
+  kill_switch_loss_pct: 0.25
+  cooldown_seconds: 120
+  allow_short: true
+tuning:
+  enable: true
+  interval_trades: 50
+  grid_variation_pct: 0.1
+  train_window: 300
+  validation_window: 120
+  objective: sharpe
+  storage_path: reports/best_params.json
+assets:
+  - symbol: "BTC/USDT"
+    timeframes: ["5m", "15m", "1h"]
+    max_exposure_pct: 0.25
+  - symbol: "ETH/USDT"
+    timeframes: ["5m", "15m", "1h"]
+    max_exposure_pct: 0.25

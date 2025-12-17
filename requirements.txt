@@ -3,3 +3,5 @@ ccxt
 pandas
 numpy
 yfinance
+pydantic>=1.10
+pytest
