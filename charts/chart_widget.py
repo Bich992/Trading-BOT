@@ -156,15 +156,14 @@ class ChartWidget(QWidget):
             color = "#51cf66" if side.lower().startswith("b") else "#ff6b6b"
             symbol = "triangle" if side.lower().startswith("b") else "t"
             tooltip = self._marker_tooltip(m)
+            payload = {**m, "tip": tooltip}
             points.append({
                 "pos": (ts, price),
-                "data": m,
+                "data": payload,
                 "brush": pg.mkBrush(color),
                 "symbol": symbol,
                 "size": 14,
                 "pen": pg.mkPen(pg.mkColor(color), width=1.2),
-                "hoverable": True,
-                "tip": tooltip,
             })
         self.marker_item.setData(points)
         for spot in self.marker_item.points():
