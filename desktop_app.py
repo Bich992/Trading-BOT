@@ -6,18 +6,17 @@ import time
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QListWidget, QListWidgetItem, QComboBox, QPushButton,
-    QTextEdit, QSplitter, QCheckBox, QGroupBox,
+    QTextEdit, QSplitter, QCheckBox, QGroupBox, QDockWidget,
     QFormLayout, QLineEdit, QMessageBox, QSpinBox, QDoubleSpinBox,
     QTableWidget, QTableWidgetItem
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject, QSettings
 from PySide6.QtGui import QColor, QPalette
 
 import pandas as pd
 
-from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
-
 from charts.chart_widget import ChartWidget
+from charts.performance_widget import PerformanceWidget
 from charts.recap_widget import RecapWidget
 from charts.live_state import LiveStateBuffer, TradeRender
 from providers.binance_provider import BinanceProvider
@@ -149,6 +148,8 @@ class MainWindow(QMainWindow):
         self.auto_timer = QTimer(self)
         self.auto_timer.timeout.connect(self._auto_multi_tick)
 
+        self.settings = QSettings("AlphaDesk", "ProDashboard")
+
         main_root = QWidget()
         main_layout = QVBoxLayout(main_root)
         main_layout.setContentsMargins(8, 8, 8, 8)
@@ -157,28 +158,32 @@ class MainWindow(QMainWindow):
         self.top_bar = self._build_top_bar()
         main_layout.addWidget(self.top_bar)
 
-        shell_splitter = QSplitter(Qt.Vertical)
-        shell_splitter.setChildrenCollapsible(False)
+        self.shell_splitter = QSplitter(Qt.Vertical)
+        self.shell_splitter.setChildrenCollapsible(False)
 
-        body_splitter = QSplitter(Qt.Horizontal)
-        body_splitter.setChildrenCollapsible(False)
-        body_splitter.addWidget(self._build_left_panel())
+        self.body_splitter = QSplitter(Qt.Horizontal)
+        self.body_splitter.setChildrenCollapsible(False)
+        self.body_splitter.addWidget(self._build_left_panel())
 
-        content_splitter = QSplitter(Qt.Horizontal)
-        content_splitter.setChildrenCollapsible(False)
-        content_splitter.addWidget(self._build_center_panel())
-        content_splitter.addWidget(self._build_right_panel())
-        content_splitter.setSizes([1200, 520])
+        self.content_splitter = QSplitter(Qt.Horizontal)
+        self.content_splitter.setChildrenCollapsible(False)
+        self.content_splitter.addWidget(self._build_center_panel())
+        self.content_splitter.addWidget(self._build_right_panel())
+        self.content_splitter.setSizes([1200, 520])
 
-        body_splitter.addWidget(content_splitter)
-        body_splitter.setSizes([220, 1500])
+        self.body_splitter.addWidget(self.content_splitter)
+        self.body_splitter.setSizes([220, 1500])
 
-        shell_splitter.addWidget(body_splitter)
-        shell_splitter.addWidget(self._build_bottom_panel())
-        shell_splitter.setSizes([840, 220])
+        self.shell_splitter.addWidget(self.body_splitter)
+        self.shell_splitter.addWidget(self._build_bottom_panel())
+        self.shell_splitter.setSizes([840, 220])
 
-        main_layout.addWidget(shell_splitter)
+        main_layout.addWidget(self.shell_splitter)
         self.setCentralWidget(main_root)
+
+        self.auto_dock = self._build_auto_dock()
+        self.addDockWidget(Qt.RightDockWidgetArea, self.auto_dock)
+        self._restore_ui_state()
 
         self._refresh_portfolio_view()
         self._refresh_trade_history()
@@ -186,6 +191,7 @@ class MainWindow(QMainWindow):
         self._refresh_watchlist()
         self._refresh_recap()
         self._update_top_bar()
+        self._update_performance_panel()
 
     # ---------------- LEFT ----------------
     def _build_sidebar(self):
@@ -281,11 +287,10 @@ class MainWindow(QMainWindow):
 
     # ---------------- CENTER ----------------
     def _build_center_panel(self):
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setChildrenCollapsible(False)
-
-        chart_panel = QWidget()
-        layout = QVBoxLayout(chart_panel)
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
         self.lbl_asset = QLabel("Selected asset: —")
@@ -322,21 +327,46 @@ class MainWindow(QMainWindow):
         self.btn_refresh.clicked.connect(self._refresh_chart)
         header.addWidget(self.btn_refresh)
 
-        zoom_hint = QLabel("Scroll on chart to zoom / drag toolbar to pan")
-        zoom_hint.setStyleSheet("color:#666;font-size:12px;")
-        header.addWidget(zoom_hint)
-
         layout.addLayout(header)
 
+        self.chart_perf_splitter = QSplitter(Qt.Vertical)
+        self.chart_perf_splitter.setChildrenCollapsible(False)
+
         self.chart = ChartWidget()
-        self.toolbar = NavigationToolbar(self.chart, self)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self.chart, 6)
+        self.performance = PerformanceWidget()
+        self.performance.setMinimumHeight(180)
+        self.chart_perf_splitter.addWidget(self.chart)
+        self.chart_perf_splitter.addWidget(self.performance)
+        self.chart_perf_splitter.setSizes([900, 300])
 
-        config_splitter = QSplitter(Qt.Vertical)
-        config_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.chart_perf_splitter)
+        return wrapper
 
-        # AUTO Multi-asset config
+    def _add_form_field(self, form: QFormLayout, label: str, widget: QWidget, helper: str, warn: bool = False):
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(widget)
+        helper_lbl = QLabel(helper)
+        helper_lbl.setStyleSheet(
+            "color:#868e96;font-size:11px;" + ("font-weight:700;color:#f08c00;" if warn else "")
+        )
+        layout.addWidget(helper_lbl)
+        form.addRow(label, wrapper)
+
+    def _build_auto_dock(self) -> QDockWidget:
+        dock = QDockWidget("Auto Multi-Asset + Short", self)
+        dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+        dock.setMinimumWidth(340)
+        dock.setMaximumWidth(560)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
+
         auto_box = QGroupBox("AUTO Multi-Asset (PAPER) – Risk-Reduced")
         f = QFormLayout(auto_box)
 
@@ -392,34 +422,17 @@ class MainWindow(QMainWindow):
         f.addRow(btn_apply)
         f.addRow(btn_reset)
 
-        config_splitter.addWidget(auto_box)
+        layout.addWidget(auto_box)
 
-        stories_box = QWidget()
+        stories_box = QGroupBox("Stories / Decision log")
         s_layout = QVBoxLayout(stories_box)
-        s_layout.addWidget(QLabel("Stories"))
         self.txt_stories = QTextEdit()
         self.txt_stories.setReadOnly(True)
-        s_layout.addWidget(self.txt_stories, 2)
-        config_splitter.addWidget(stories_box)
-        config_splitter.setSizes([420, 260])
+        s_layout.addWidget(self.txt_stories)
+        layout.addWidget(stories_box, 1)
 
-        splitter.addWidget(chart_panel)
-        splitter.addWidget(config_splitter)
-        splitter.setSizes([760, 320])
-        return splitter
-
-    def _add_form_field(self, form: QFormLayout, label: str, widget: QWidget, helper: str, warn: bool = False):
-        wrapper = QWidget()
-        layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-        layout.addWidget(widget)
-        helper_lbl = QLabel(helper)
-        helper_lbl.setStyleSheet(
-            "color:#868e96;font-size:11px;" + ("font-weight:700;color:#f08c00;" if warn else "")
-        )
-        layout.addWidget(helper_lbl)
-        form.addRow(label, wrapper)
+        dock.setWidget(container)
+        return dock
 
     # ---------------- RIGHT ----------------
     def _build_right_panel(self):
@@ -684,6 +697,7 @@ class MainWindow(QMainWindow):
         self._refresh_trade_history()
         self._refresh_positions_list()
         self._refresh_recap()
+        self._update_performance_panel()
         self._update_top_bar()
 
     def _toggle_auto(self, _):
@@ -741,6 +755,7 @@ class MainWindow(QMainWindow):
         self._refresh_positions_list()
         self._refresh_recap()
         self._update_top_bar()
+        self._update_performance_panel()
 
         # refresh chart only for selected symbol (avoid heavy UI)
         if self.current_symbol:
@@ -1001,7 +1016,60 @@ class MainWindow(QMainWindow):
             self.chart.update_snapshot(df, markers=markers, title=chart_title)
             self.last_df = df
             self._update_top_bar()
+            self._update_performance_panel()
         self._refresh_trades_live(last_price)
+
+    def _update_performance_panel(self):
+        if not hasattr(self, "performance"):
+            return
+        prices = {}
+        if self.current_symbol and self.last_df is not None and not self.last_df.empty:
+            prices[self.current_symbol] = float(self.last_df["Close"].iloc[-1])
+        now_equity = self.portfolio.equity(prices)
+        self.performance.update_performance(self.portfolio.trades, self.initial_cash, now_equity)
+
+    def closeEvent(self, event):
+        self._save_ui_state()
+        super().closeEvent(event)
+
+    def _restore_ui_state(self):
+        geom = self.settings.value("geometry")
+        if geom:
+            self.restoreGeometry(geom)
+        state = self.settings.value("windowState")
+        if state:
+            self.restoreState(state)
+        self._restore_splitter_sizes(self.shell_splitter, "shell_splitter")
+        self._restore_splitter_sizes(self.body_splitter, "body_splitter")
+        self._restore_splitter_sizes(self.content_splitter, "content_splitter")
+        self._restore_splitter_sizes(self.chart_perf_splitter, "chart_perf_splitter", default=[900, 260])
+
+        dock_area = self.settings.value("autoDockArea")
+        if dock_area is not None:
+            self.addDockWidget(Qt.DockWidgetArea(int(dock_area)), self.auto_dock)
+        floating = self.settings.value("autoDockFloating")
+        if floating is not None:
+            self.auto_dock.setFloating(floating in [True, "true", "1"])
+
+    def _save_ui_state(self):
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("windowState", self.saveState())
+        self._save_splitter_sizes(self.shell_splitter, "shell_splitter")
+        self._save_splitter_sizes(self.body_splitter, "body_splitter")
+        self._save_splitter_sizes(self.content_splitter, "content_splitter")
+        self._save_splitter_sizes(self.chart_perf_splitter, "chart_perf_splitter")
+        self.settings.setValue("autoDockArea", int(self.dockWidgetArea(self.auto_dock)))
+        self.settings.setValue("autoDockFloating", self.auto_dock.isFloating())
+
+    def _restore_splitter_sizes(self, splitter: QSplitter, key: str, default: list[int] | None = None):
+        sizes = self.settings.value(key)
+        if sizes:
+            splitter.setSizes([int(s) for s in sizes])
+        elif default:
+            splitter.setSizes(default)
+
+    def _save_splitter_sizes(self, splitter: QSplitter, key: str):
+        self.settings.setValue(key, splitter.sizes())
 
     def _apply_dark_theme(self):
         palette = QPalette()
