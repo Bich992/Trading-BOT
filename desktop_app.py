@@ -14,11 +14,13 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
 from charts.chart_widget import ChartWidget
+from charts.recap_widget import RecapWidget
 from providers.binance_provider import BinanceProvider
 
 from core.decision_engine import DecisionEngine
 from core.paper_engine import PaperPortfolio
 from core.auto_manager import AutoManager, AutoConfig
+from core.timeframe_selector import choose_best_timeframe
 
 
 TIMEFRAMES = ["1s", "5s", "10s", "30s", "1m", "3m", "5m", "15m", "30m", "1h"]
@@ -51,6 +53,11 @@ class MainWindow(QMainWindow):
         self.portfolio = PaperPortfolio(cash=1000.0, fee_rate=0.001)
         self.auto = AutoManager(self.engine, self.portfolio)
         self.cfg = AutoConfig()
+        self.initial_cash = self.portfolio.cash
+
+        self.learning_mode = True
+        self.tf_candidates = ["1m", "5m", "15m", "1h"]
+        self.last_tf_scores = {}
 
         self.current_symbol = None
         self.current_tf = "5m"
@@ -87,28 +94,33 @@ class MainWindow(QMainWindow):
         self._refresh_trade_history()
         self._refresh_positions_list()
         self._refresh_watchlist()
+        self._refresh_recap()
 
     # ---------------- LEFT ----------------
     def _build_left_panel(self):
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
 
-        # Load all symbols
+        # -- Market browser section --
+        market_box = QWidget()
+        m_layout = QVBoxLayout(market_box)
+        m_layout.addWidget(QLabel("Modalità: Apprendimento Virtuale (PAPER)"))
+
         row = QHBoxLayout()
         self.btn_load = QPushButton("Load ALL Binance Symbols")
         self.btn_load.clicked.connect(self._load_all_markets_async)
         row.addWidget(self.btn_load)
-        layout.addLayout(row)
+        m_layout.addLayout(row)
 
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText("Search symbol… e.g. BTC/USDT")
         self.txt_search.textChanged.connect(self._apply_market_filter)
-        layout.addWidget(self.txt_search)
+        m_layout.addWidget(self.txt_search)
 
-        layout.addWidget(QLabel("Market Browser"))
+        m_layout.addWidget(QLabel("Market Browser"))
         self.list_markets = QListWidget()
         self.list_markets.setAlternatingRowColors(True)
-        layout.addWidget(self.list_markets, 2)
+        m_layout.addWidget(self.list_markets, 2)
 
         btn_row = QHBoxLayout()
         self.btn_add_watch = QPushButton("Add → Watchlist")
@@ -117,34 +129,52 @@ class MainWindow(QMainWindow):
         self.btn_remove_watch.clicked.connect(self._remove_selected_from_watchlist)
         btn_row.addWidget(self.btn_add_watch)
         btn_row.addWidget(self.btn_remove_watch)
-        layout.addLayout(btn_row)
+        m_layout.addLayout(btn_row)
 
-        layout.addWidget(QLabel("Watchlist (AUTO works here)"))
+        # -- Watchlist section --
+        watch_box = QWidget()
+        w_layout = QVBoxLayout(watch_box)
+        w_layout.addWidget(QLabel("Watchlist (AUTO works here)"))
         self.list_watch = QListWidget()
         self.list_watch.itemClicked.connect(self._select_asset_from_watchlist)
         self.list_watch.setAlternatingRowColors(True)
-        layout.addWidget(self.list_watch, 2)
+        w_layout.addWidget(self.list_watch, 2)
 
-        layout.addWidget(QLabel("Portfolio (PAPER)"))
+        # -- Portfolio section --
+        portfolio_box = QWidget()
+        p_layout = QVBoxLayout(portfolio_box)
+        p_layout.addWidget(QLabel("Portfolio (PAPER)"))
         self.txt_portfolio = QTextEdit()
         self.txt_portfolio.setReadOnly(True)
-        layout.addWidget(self.txt_portfolio, 2)
+        p_layout.addWidget(self.txt_portfolio, 2)
 
-        layout.addWidget(QLabel("Open Positions (green=profit, red=loss)"))
+        p_layout.addWidget(QLabel("Open Positions (green=profit, red=loss)"))
         self.list_positions = QListWidget()
-        layout.addWidget(self.list_positions, 2)
+        p_layout.addWidget(self.list_positions, 2)
 
-        return panel
+        splitter.addWidget(market_box)
+        splitter.addWidget(watch_box)
+        splitter.addWidget(portfolio_box)
+        splitter.setSizes([400, 260, 260])
+        return splitter
 
     # ---------------- CENTER ----------------
     def _build_center_panel(self):
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+
+        chart_panel = QWidget()
+        layout = QVBoxLayout(chart_panel)
 
         header = QHBoxLayout()
         self.lbl_asset = QLabel("Selected asset: —")
         self.lbl_asset.setStyleSheet("font-size:18px;font-weight:700;")
         header.addWidget(self.lbl_asset)
+
+        self.lbl_tf_auto = QLabel("TF auto: —")
+        self.lbl_tf_auto.setStyleSheet("color:#0b7285;font-weight:600;")
+        header.addWidget(self.lbl_tf_auto)
+
         header.addStretch()
 
         self.cmb_tf = QComboBox()
@@ -168,6 +198,9 @@ class MainWindow(QMainWindow):
         self.toolbar = NavigationToolbar(self.chart, self)
         layout.addWidget(self.toolbar)
         layout.addWidget(self.chart, 6)
+
+        config_splitter = QSplitter(Qt.Vertical)
+        config_splitter.setChildrenCollapsible(False)
 
         # AUTO Multi-asset config
         auto_box = QGroupBox("AUTO Multi-Asset (PAPER) – Risk-Reduced")
@@ -225,31 +258,64 @@ class MainWindow(QMainWindow):
         f.addRow(btn_apply)
         f.addRow(btn_reset)
 
-        layout.addWidget(auto_box, 3)
+        config_splitter.addWidget(auto_box)
 
-        layout.addWidget(QLabel("Stories"))
+        stories_box = QWidget()
+        s_layout = QVBoxLayout(stories_box)
+        s_layout.addWidget(QLabel("Stories"))
         self.txt_stories = QTextEdit()
         self.txt_stories.setReadOnly(True)
-        layout.addWidget(self.txt_stories, 2)
+        s_layout.addWidget(self.txt_stories, 2)
+        config_splitter.addWidget(stories_box)
+        config_splitter.setSizes([420, 260])
 
-        return panel
+        splitter.addWidget(chart_panel)
+        splitter.addWidget(config_splitter)
+        splitter.setSizes([760, 320])
+        return splitter
 
     # ---------------- RIGHT ----------------
     def _build_right_panel(self):
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
 
-        layout.addWidget(QLabel("Bot Thoughts"))
+        thoughts_box = QWidget()
+        t_layout = QVBoxLayout(thoughts_box)
+        t_layout.addWidget(QLabel("Bot Thoughts"))
         self.txt_thoughts = QTextEdit()
         self.txt_thoughts.setReadOnly(True)
-        layout.addWidget(self.txt_thoughts, 4)
+        t_layout.addWidget(self.txt_thoughts, 4)
 
-        layout.addWidget(QLabel("Trade History (PAPER)"))
+        trades_box = QWidget()
+        tr_layout = QVBoxLayout(trades_box)
+        tr_layout.addWidget(QLabel("Trade History (PAPER)"))
         self.txt_trades = QTextEdit()
         self.txt_trades.setReadOnly(True)
-        layout.addWidget(self.txt_trades, 4)
+        tr_layout.addWidget(self.txt_trades, 4)
 
-        return panel
+        recap_box = QWidget()
+        r_layout = QVBoxLayout(recap_box)
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Recap Apprendimento Virtuale"))
+        self.btn_recap = QPushButton("Aggiorna recap")
+        self.btn_recap.clicked.connect(self._refresh_recap)
+        header.addWidget(self.btn_recap)
+        header.addStretch()
+        r_layout.addLayout(header)
+
+        self.recap_chart = RecapWidget()
+        r_layout.addWidget(self.recap_chart, 5)
+
+        self.txt_recap = QTextEdit()
+        self.txt_recap.setReadOnly(True)
+        r_layout.addWidget(self.txt_recap, 3)
+
+        splitter.addWidget(thoughts_box)
+        splitter.addWidget(trades_box)
+        splitter.addWidget(recap_box)
+        splitter.setSizes([260, 260, 420])
+
+        return splitter
 
     # ---------------- Markets load/search ----------------
     def _load_all_markets_async(self):
@@ -332,12 +398,20 @@ class MainWindow(QMainWindow):
         try:
             self.last_df = self.provider.fetch_ohlc(self.current_symbol, self.current_tf, limit=400)
             markers = self.markers_by_symbol.get(self.current_symbol, [])
+            tf_info = self.last_tf_scores.get(self.current_symbol)
+            if tf_info:
+                self.lbl_tf_auto.setText(f"TF auto: {tf_info.timeframe} ({tf_info.regime})")
+                chart_title = f"{self.current_symbol} @ {self.current_tf} | best {tf_info.timeframe} ({tf_info.regime})"
+            else:
+                self.lbl_tf_auto.setText("TF auto: —")
+                chart_title = f"{self.current_symbol} @ {self.current_tf}"
             self.chart.plot(
                 self.last_df,
                 markers=markers,
                 ema_list=(self.ema_1, self.ema_2, self.ema_3),
                 rsi_period=self.rsi_period,
-                macd_params=(self.macd_fast, self.macd_slow, self.macd_sig)
+                macd_params=(self.macd_fast, self.macd_slow, self.macd_sig),
+                title=chart_title
             )
         except Exception as e:
             self._append_story(f"Chart load error: {e}")
@@ -368,10 +442,13 @@ class MainWindow(QMainWindow):
         fee = float(self.sp_fee.value())
         self.portfolio = PaperPortfolio(cash=cash, fee_rate=fee)
         self.auto = AutoManager(self.engine, self.portfolio)
+        self.initial_cash = cash
+        self.last_tf_scores = {}
         self._append_story(f"PAPER reset: cash={cash:.2f}, fee={fee:.4f}")
         self._refresh_portfolio_view()
         self._refresh_trade_history()
         self._refresh_positions_list()
+        self._refresh_recap()
 
     def _toggle_auto(self, _):
         if self.chk_auto.isChecked():
@@ -387,18 +464,25 @@ class MainWindow(QMainWindow):
 
     # ---------------- AUTO multi tick ----------------
     def _auto_multi_tick(self):
-        # Fetch minimal TF for decisions (1m) for all watchlist
         ohlc_by_symbol = {}
+        tf_scores = {}
         now = dt.datetime.now()
 
         for s in self.watchlist:
-            try:
-                df = self.provider.fetch_ohlc(s, "1m", limit=220)
-                ohlc_by_symbol[s] = df
-            except Exception:
-                ohlc_by_symbol[s] = None
+            frames = {}
+            for tf in self.tf_candidates:
+                try:
+                    frames[tf] = self.provider.fetch_ohlc(s, tf, limit=220)
+                except Exception:
+                    frames[tf] = None
 
-        logs = self.auto.step(self.watchlist, ohlc_by_symbol, now, self.cfg)
+            best = choose_best_timeframe(frames)
+            tf_scores[s] = best
+            ohlc_by_symbol[s] = frames.get(best.timeframe)
+
+        self.last_tf_scores = tf_scores
+
+        logs = self.auto.step(self.watchlist, ohlc_by_symbol, now, self.cfg, best_timeframes=tf_scores)
         for line in logs:
             self._append_story(line)
 
@@ -419,6 +503,7 @@ class MainWindow(QMainWindow):
         self._refresh_portfolio_view()
         self._refresh_trade_history()
         self._refresh_positions_list()
+        self._refresh_recap()
 
         # refresh chart only for selected symbol (avoid heavy UI)
         if self.current_symbol:
@@ -450,6 +535,8 @@ class MainWindow(QMainWindow):
             f"Cash: {self.portfolio.cash:.2f}",
             f"Equity: {eq:.2f}",
             f"Fee rate: {self.portfolio.fee_rate:.4f}",
+            f"Total fee pagate: {self.portfolio.total_fees():.4f}",
+            f"PnL realizzato: {self.portfolio.realized_pnl():.4f}",
             "",
             "Positions (net):"
         ]
@@ -496,6 +583,40 @@ class MainWindow(QMainWindow):
                 f"| qty={t.qty:.6f} @ {t.price:.6f} | fee={t.fee:.4f} | pnlR={t.pnl_realized:.4f} | {t.note}"
             )
         self.txt_trades.setText("\n".join(lines) if lines else "No trades yet.")
+
+    def _refresh_recap(self):
+        trades = list(self.portfolio.trades)
+        total_fees = self.portfolio.total_fees()
+        realized = self.portfolio.realized_pnl()
+        gross = realized + total_fees
+        win_count = sum(1 for t in trades if t.pnl_realized > 0)
+        loss_count = sum(1 for t in trades if t.pnl_realized < 0)
+        tf_lines = []
+        for sym, score in self.last_tf_scores.items():
+            tf_lines.append(f"- {sym}: {score.timeframe} ({score.regime}) score={score.score:.2f}")
+
+        strat_notes = [
+            "Selezione timeframe automatica per minimizzare chop/rischio",
+            "Gestione fee inclusa in ogni trade (pnl realizzato netto)",
+            "Pyramid/mean-reversion controllate dal rischio ATR/RSI"
+        ]
+
+        lines = [
+            "Recap simulazione (pronto per il live solo dopo revisione):",
+            f"- Modalità virtuale attiva: {self.learning_mode}",
+            f"- Operazioni simulate: {len(trades)} (win={win_count}, loss={loss_count})",
+            f"- Risultato lordo: {gross:.4f}",
+            f"- Fee e costi stimati: {total_fees:.4f}",
+            f"- PnL netto (realizzato): {realized:.4f}",
+            f"- Equity di partenza: {self.initial_cash:.2f}",
+            "- Timeframe ottimali recenti:",
+            *(tf_lines or ["  nessun dato ancora"]),
+            "- Strategie migliorate:",
+            *(f"  • {s}" for s in strat_notes)
+        ]
+
+        self.txt_recap.setText("\n".join(lines))
+        self.recap_chart.plot(trades, self.initial_cash)
 
 
 if __name__ == "__main__":

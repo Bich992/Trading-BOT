@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import List, Optional
 import pandas as pd
+from dataclasses import dataclass
+from typing import List, Optional
 
 from .indicators import ema, rsi, macd, atr
 from .regime import detect_regime

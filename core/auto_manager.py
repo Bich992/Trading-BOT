@@ -6,6 +6,7 @@ import pandas as pd
 from .decision_engine import DecisionEngine
 from .paper_engine import PaperPortfolio
 from .indicators import atr
+from .timeframe_selector import TFScore
 
 
 @dataclass
@@ -77,12 +78,15 @@ class AutoManager:
         watchlist: List[str],
         ohlc_by_symbol: Dict[str, pd.DataFrame],
         now: dt.datetime,
-        cfg: AutoConfig
+        cfg: AutoConfig,
+        best_timeframes: Optional[Dict[str, TFScore]] = None,
     ) -> List[str]:
         """
         Returns log lines about actions taken.
         """
         logs: List[str] = []
+
+        best_timeframes = best_timeframes or {}
 
         # build prices for equity
         prices = {}
@@ -115,7 +119,10 @@ class AutoManager:
                 continue
 
             # Decision (use your DecisionEngine)
-            d = self.engine.decide(symbol, "auto", df)
+            tf_choice = best_timeframes.get(symbol)
+            timeframe_used = tf_choice.timeframe if tf_choice else "auto"
+            d = self.engine.decide(symbol, timeframe_used, df)
+            tf_note = f"tf={timeframe_used}"
 
             # 1) If position exists: focus on exits first
             if direction != "flat":
@@ -131,7 +138,7 @@ class AutoManager:
                     t = self.portfolio.close_qty_fifo(symbol, qty_to_close, price, now, order_type="auto",
                                                       note="Signal flip → scale-out 50%")
                     self.last_trade_time[symbol] = now
-                    logs.append(f"{symbol}: SCALE-OUT 50% on flip | pnlR={t.pnl_realized:.4f}")
+                    logs.append(f"{symbol}: SCALE-OUT 50% on flip | pnlR={t.pnl_realized:.4f} | {tf_note} reg={d.regime}")
                     continue
 
                 # Same-direction add logic (legs)
@@ -160,7 +167,7 @@ class AutoManager:
                                 t = self.portfolio.open_leg(symbol, "long", qty, price, now, d.stop_loss, d.take_profit,
                                                             d.confidence, d.regime, "PYRAMID add", order_type="auto")
                                 self.last_trade_time[symbol] = now
-                                logs.append(f"{symbol}: PYRAMID ADD LONG | qty={qty:.6f}")
+                                logs.append(f"{symbol}: PYRAMID ADD LONG | qty={qty:.6f} | {tf_note} reg={d.regime}")
                     else:
                         moved_ok = (avg - price) >= cfg.pyramiding_atr * a
                         want_action = (d.action == "SELL" and d.confidence >= cfg.conf_add)
@@ -170,7 +177,7 @@ class AutoManager:
                                 t = self.portfolio.open_leg(symbol, "short", qty, price, now, d.stop_loss, d.take_profit,
                                                             d.confidence, d.regime, "PYRAMID add", order_type="auto")
                                 self.last_trade_time[symbol] = now
-                                logs.append(f"{symbol}: PYRAMID ADD SHORT | qty={qty:.6f}")
+                                logs.append(f"{symbol}: PYRAMID ADD SHORT | qty={qty:.6f} | {tf_note} reg={d.regime}")
 
                 elif cfg.add_mode == "MEANREV":
                     # Add only in RANGE and with strong mean-reversion conditions
@@ -186,7 +193,7 @@ class AutoManager:
                                 self.portfolio.open_leg(symbol, "long", qty, price, now, d.stop_loss, d.take_profit,
                                                         d.confidence, d.regime, "MEANREV add", order_type="auto")
                                 self.last_trade_time[symbol] = now
-                                logs.append(f"{symbol}: MEANREV ADD LONG | qty={qty:.6f}")
+                                logs.append(f"{symbol}: MEANREV ADD LONG | qty={qty:.6f} | {tf_note} reg={d.regime}")
                     else:
                         if d.action == "SELL" and d.confidence >= cfg.conf_add and cfg.allow_short:
                             qty = self._compute_qty(symbol, price, d.stop_loss, cfg, equity) * 0.6
@@ -194,7 +201,7 @@ class AutoManager:
                                 self.portfolio.open_leg(symbol, "short", qty, price, now, d.stop_loss, d.take_profit,
                                                         d.confidence, d.regime, "MEANREV add", order_type="auto")
                                 self.last_trade_time[symbol] = now
-                                logs.append(f"{symbol}: MEANREV ADD SHORT | qty={qty:.6f}")
+                                logs.append(f"{symbol}: MEANREV ADD SHORT | qty={qty:.6f} | {tf_note} reg={d.regime}")
 
                 continue  # done managing existing position
 
@@ -216,7 +223,7 @@ class AutoManager:
                                             d.confidence, d.regime, "ENTRY", order_type="auto")
                     self.last_trade_time[symbol] = now
                     open_assets += 1
-                    logs.append(f"{symbol}: ENTRY LONG | qty={qty:.6f} conf={d.confidence:.2f} regime={d.regime}")
+                    logs.append(f"{symbol}: ENTRY LONG | qty={qty:.6f} conf={d.confidence:.2f} regime={d.regime} {tf_note}")
             elif d.action == "SELL" and cfg.allow_short:
                 qty = self._compute_qty(symbol, price, d.stop_loss, cfg, equity)
                 if qty > 0:
@@ -224,6 +231,6 @@ class AutoManager:
                                             d.confidence, d.regime, "ENTRY", order_type="auto")
                     self.last_trade_time[symbol] = now
                     open_assets += 1
-                    logs.append(f"{symbol}: ENTRY SHORT | qty={qty:.6f} conf={d.confidence:.2f} regime={d.regime}")
+                    logs.append(f"{symbol}: ENTRY SHORT | qty={qty:.6f} conf={d.confidence:.2f} regime={d.regime} {tf_note}")
 
         return logs

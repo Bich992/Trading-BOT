@@ -47,6 +47,12 @@ class PaperPortfolio:
                 eq += nq * prices[sym]
         return eq
 
+    def total_fees(self) -> float:
+        return sum(t.fee for t in self.trades)
+
+    def realized_pnl(self) -> float:
+        return sum(t.pnl_realized for t in self.trades)
+
     def unrealized_pnl(self, symbol: str, price: float) -> float:
         book = self.get_book(symbol)
         nq = book.net_qty()
