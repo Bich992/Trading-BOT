@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import datetime as dt
 
 from .position_legs import PositionBook, Leg
@@ -13,6 +13,8 @@ class Trade:
     qty: float
     price: float
     fee: float
+    slippage: float = 0.0
+    latency_ms: int = 0
     order_type: str = "paper"
     pnl_realized: float = 0.0
     note: str = ""
@@ -22,11 +24,19 @@ class Trade:
 class PaperPortfolio:
     cash: float = 1000.0
     fee_rate: float = 0.001
+    slippage_bps: float = 0.0
+    simulate_latency_ms: int = 0
     books: Dict[str, PositionBook] = field(default_factory=dict)
     trades: List[Trade] = field(default_factory=list)
 
     def _fee(self, notional: float) -> float:
         return abs(notional) * self.fee_rate
+
+    def _apply_slippage(self, price: float, side: str) -> float:
+        if self.slippage_bps <= 0:
+            return price
+        slip = price * (self.slippage_bps / 10_000)
+        return price + slip if side == "buy" else price - slip
 
     def get_book(self, symbol: str) -> PositionBook:
         if symbol not in self.books:
@@ -81,7 +91,8 @@ class PaperPortfolio:
     ) -> Trade:
         if qty <= 0:
             raise ValueError("qty must be > 0")
-        notional = qty * price
+        price_exec = self._apply_slippage(price, "buy" if side == "long" else "sell")
+        notional = qty * price_exec
         fee = self._fee(notional)
 
         # Paper cash model:
@@ -97,13 +108,14 @@ class PaperPortfolio:
             raise ValueError("side must be 'long' or 'short'")
 
         book = self.get_book(symbol)
-        book.legs.append(Leg(ts=ts, side=side, qty=qty, entry=price, sl=sl, tp=tp,
+        book.legs.append(Leg(ts=ts, side=side, qty=qty, entry=price_exec, sl=sl, tp=tp,
                             confidence=confidence, regime=regime, reason=reason))
 
         t = Trade(ts=ts, symbol=symbol,
                   side="buy" if side == "long" else "sell",
-                  qty=qty, price=price, fee=fee, order_type=order_type,
-                  pnl_realized=-fee, note=f"OPEN {side.upper()} LEG")
+                  qty=qty, price=price_exec, fee=fee, order_type=order_type,
+                  pnl_realized=-fee, slippage=price_exec - price, latency_ms=self.simulate_latency_ms,
+                  note=f"OPEN {side.upper()} LEG")
         self.trades.append(t)
         return t
 
@@ -114,7 +126,7 @@ class PaperPortfolio:
         price: float,
         ts: dt.datetime,
         order_type: str = "auto",
-        note: str = ""
+        note: str = "",
     ) -> Trade:
         """
         Closes qty against existing net position using FIFO on legs of that direction.
@@ -133,7 +145,8 @@ class PaperPortfolio:
         qty_avail = abs(nq)
         qty = min(qty_to_close, qty_avail)
 
-        notional = qty * price
+        price_exec = self._apply_slippage(price, "sell" if direction == "long" else "buy")
+        notional = qty * price_exec
         fee = self._fee(notional)
 
         realized = 0.0
@@ -163,9 +176,9 @@ class PaperPortfolio:
             take = min(leg.qty, remaining)
             # realized PnL for that chunk
             if direction == "long":
-                realized += (price - leg.entry) * take
+                realized += (price_exec - leg.entry) * take
             else:
-                realized += (leg.entry - price) * take
+                realized += (leg.entry - price_exec) * take
 
             leg.qty -= take
             remaining -= take
@@ -182,11 +195,13 @@ class PaperPortfolio:
             symbol=symbol,
             side="sell" if direction == "long" else "buy",
             qty=qty,
-            price=price,
+            price=price_exec,
             fee=fee,
             order_type=order_type,
             pnl_realized=realized,
-            note=note or f"CLOSE {direction.upper()} FIFO"
+            slippage=price_exec - price,
+            latency_ms=self.simulate_latency_ms,
+            note=note or f"CLOSE {direction.upper()} FIFO",
         )
         self.trades.append(t)
         return t
