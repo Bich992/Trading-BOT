@@ -1,24 +1,36 @@
 import pandas as pd
 import mplfinance as mpf
+from typing import Optional
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 
 class ChartWidget(FigureCanvas):
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(9, 7))
+        self.fig = Figure(figsize=(9, 7), tight_layout=True)
         super().__init__(self.fig)
         self.setParent(parent)
 
         self.ax_price = self.fig.add_subplot(3, 1, 1)
         self.ax_rsi = self.fig.add_subplot(3, 1, 2, sharex=self.ax_price)
         self.ax_macd = self.fig.add_subplot(3, 1, 3, sharex=self.ax_price)
-        self.fig.tight_layout()
 
         # Enable smooth mouse-wheel zooming over the charts.
         self.mpl_connect("scroll_event", self._on_scroll)
 
-    def plot(self, df: pd.DataFrame, markers=None, ema_list=(20, 50, 200), rsi_period=14, macd_params=(12, 26, 9)):
+        # give the chart a slightly warmer background to improve readability on mobile/hi-dpi
+        for ax in (self.ax_price, self.ax_rsi, self.ax_macd):
+            ax.set_facecolor("#f8f9fa")
+
+    def plot(
+        self,
+        df: pd.DataFrame,
+        markers=None,
+        ema_list=(20, 50, 200),
+        rsi_period=14,
+        macd_params=(12, 26, 9),
+        title: Optional[str] = None,
+    ):
         """Render OHLC candles with indicators and optional markers."""
         self.ax_price.clear()
         self.ax_rsi.clear()
@@ -45,22 +57,28 @@ class ChartWidget(FigureCanvas):
                         marker="^" if kind == "buy" else "v",
                         color="green" if kind == "buy" else "red",
                         s=60,
+                        alpha=0.9,
+                        edgecolor="black",
+                        linewidth=0.6,
                     )
 
         self.ax_price.grid(True, linestyle=":", alpha=0.4)
-        self.ax_price.set_title("Price / EMA", loc="left")
+        self.ax_price.set_title(title or "Price / EMA (sim)", loc="left")
 
         rsi = self._rsi(df["Close"], period=rsi_period)
-        self.ax_rsi.plot(df.index, rsi, color="#0d6efd")
+        self.ax_rsi.plot(df.index, rsi, color="#0d6efd", linewidth=1.2)
+        self.ax_rsi.fill_between(df.index, rsi, 50, color="#0d6efd", alpha=0.08)
         self.ax_rsi.axhline(70, linestyle="--", color="red", alpha=0.7)
         self.ax_rsi.axhline(30, linestyle="--", color="green", alpha=0.7)
         self.ax_rsi.set_ylabel(f"RSI ({rsi_period})")
         self.ax_rsi.grid(True, linestyle=":", alpha=0.3)
 
         macd, signal = self._macd(df["Close"], macd_params)
+        hist = macd - signal
+        self.ax_macd.bar(df.index, hist, color="#adb5bd", alpha=0.5, width=0.8, label="Hist")
         self.ax_macd.plot(df.index, macd, label="MACD", color="#6f42c1")
         self.ax_macd.plot(df.index, signal, label="Signal", color="#d63384")
-        self.ax_macd.legend()
+        self.ax_macd.legend(loc="upper left")
         self.ax_macd.set_ylabel("MACD")
         self.ax_macd.grid(True, linestyle=":", alpha=0.3)
 
